@@ -3,74 +3,119 @@ use std::env;
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    // Assuming the argument is the second command line argument
     if args.len() > 1 {
         let arg = &args[1];
-
-        // Try to parse as integer
-        match arg.parse::<i64>() {
-            Ok(i) => convert_integer(i),
-            Err(_) => {
-                match arg.parse::<u64>() {
-                    Ok(u) => convert_unsigned_integer(u),
-                    Err(_) => {
-                        // Try to parse as floating-point
-                        match arg.parse::<f64>() {
-                            Ok(f) => convert_double(f),
-                            Err(_) => {
-                                // Try to parse as hexadecimal
-                                if arg.starts_with("0x") || arg.starts_with("0X") {
-                                    let hex_part = &arg[2..]; // Remove the "0x" prefix
-                                    match i64::from_str_radix(hex_part, 16) {
-                                        Ok(h) => println!("Parsed as hexadecimal: {}", h),
-                                        Err(_) => println!("Failed to parse as hexadecimal."),
-                                    }
-                                } else if arg.ends_with("f") || arg.ends_with("F") {
-                                    let float_part = &arg[..arg.len() - 1]; // Remove the "f" suffix
-                                    match float_part.parse::<f32>() {
-                                        Ok(f) => convert_float(f),
-                                        Err(_) => println!("Failed to parse as float."),
-                                    }
-                                } else {
-                                    println!("Argument didn't match any expected format.");
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        parse_and_convert(arg);
     } else {
         println!("Please provide an argument.");
     }
 }
 
-fn convert_integer(int_64: i64) {
-    // Convert to byte array in little-endian format
-    format_bytes(&int_64.to_le_bytes());
+fn parse_and_convert(arg: &str) {
+    use regex::Regex; // Add the import statement here
+
+    if let Ok(i) = arg.parse::<i64>() {
+        convert_and_print_bytes(&i.to_le_bytes());
+    } else if let Ok(u) = arg.parse::<u64>() {
+        convert_and_print_bytes(&u.to_le_bytes());
+    } else if let Ok(f) = arg.parse::<f64>() {
+        convert_and_print_bytes(&f.to_le_bytes());
+    } else if arg.ends_with('f') || arg.ends_with('F') {
+        parse_float(arg);
+    } else {
+        let pattern = r"^(0x|<0x|>0x|0X|<0X|>0X|>|<)?.*?[hH]?$";
+        let re = Regex::new(pattern).unwrap();
+        if re.is_match(arg) {
+            parse_hex(arg);
+        } else {
+            println!("Argument didn't match any expected format.");
+        }
+    }
 }
 
-fn convert_unsigned_integer(uint_64: u64) {
-    // Convert to byte array in little-endian format
-    format_bytes(&uint_64.to_le_bytes());
-}
-
-fn convert_float(float_value: f32) {
+fn convert_and_print_float(float_value: f32) {
     // Convert to byte array in little-endian format
     let float_bytes = float_value.to_le_bytes();
     let int32 = i32::from_le_bytes(float_bytes);
     let int64: i64 = int32 as i64; // Convert i32 to i64
     let int64_bytes = int64.to_le_bytes();
-    format_bytes(&int64_bytes);
+    convert_and_print_bytes(&int64_bytes);
 }
 
-fn convert_double(double_value: f64) {
-    // Convert to byte array in little-endian format
-    let double_bytes = double_value.to_le_bytes();
-    format_bytes(&double_bytes);
+fn hex_to_byte_array(hex_str: &str, is_big_endian: bool) -> [u8; 8] {
+    let mut bytes = Vec::new();
+
+    // Convert hex string to bytes
+    for chunk in hex_str.as_bytes().chunks(2) {
+        let hex = std::str::from_utf8(chunk).expect("Invalid UTF-8 sequence");
+        if let Ok(byte) = u8::from_str_radix(hex, 16) {
+            bytes.push(byte);
+        }
+    }
+
+    // If input is big-endian, reverse it for little-endian systems (most systems are little-endian)
+    if is_big_endian {
+        bytes.reverse();
+    }
+
+    // Initialize a fixed size array with zeros
+    let mut fixed_bytes: [u8; 8] = [0; 8];
+
+    // Copy the bytes into the fixed size array, truncating or padding as necessary
+    for (i, &byte) in bytes.iter().enumerate().take(8) {
+        fixed_bytes[i] = byte;
+    }
+
+    fixed_bytes
 }
 
-fn format_bytes(bytes: &[u8; 8]) {
+fn parse_float(arg: &str) {
+    let float_arg = &arg[..arg.len() - 1]; // Remove the 'f' suffix
+    match float_arg.parse::<f32>() {
+        Ok(f) => convert_and_print_float(f),
+        Err(_) => println!("Failed to parse as float."),
+    }
+}
+
+fn parse_hex(arg: &str) {
+    let (big_endian, hex_value) = parse_hex_string(arg);
+    let bytes = hex_to_byte_array(&hex_value, big_endian);
+    convert_and_print_bytes(&bytes);
+}
+
+fn parse_hex_string(input: &str) -> (bool, String) {
+    // Determine the boolean value based on the starting character
+    let starts_with = match input.chars().next() {
+        Some('>') => true,
+        Some('<') => false,
+        _ => true,
+    };
+
+    // Remove '>' or '<' from the start if present
+    let trimmed_start = if input.starts_with('>') || input.starts_with('<') {
+        &input[1..]
+    } else {
+        input
+    };
+
+    // Remove "0x" or "0X" prefix if present
+    let trimmed_prefix = if trimmed_start.to_lowercase().starts_with("0x") {
+        &trimmed_start[2..]
+    } else {
+        trimmed_start
+    };
+
+    // Remove "h" or "H" suffix if present
+    let hex_value = if trimmed_prefix.to_lowercase().ends_with('h') {
+        &trimmed_prefix[..trimmed_prefix.len() - 1]
+    } else {
+        trimmed_prefix
+    };
+
+    (starts_with, hex_value.to_string())
+}
+
+fn convert_and_print_bytes(bytes: &[u8; 8]) {
     // Convert to various integer types
     let int64 = i64::from_le_bytes(bytes[0..8].try_into().unwrap());
     let int32 = i32::from_le_bytes(bytes[0..4].try_into().unwrap());
@@ -86,18 +131,20 @@ fn format_bytes(bytes: &[u8; 8]) {
     let float_value = f32::from_le_bytes(bytes[0..4].try_into().unwrap());
     let double_value = f64::from_le_bytes(bytes[0..8].try_into().unwrap());
 
-    // Display integer, float, and double
-    //println!("  Hexadecimal: 0x{:0>16x}", int_64);
-
-    // Use iterator to reverse the byte array and map each byte to its hexadecimal representation
-    let hex_string: String = bytes
+    let little_endian_bytes = uint64.to_le_bytes();
+    let hex_string: String = little_endian_bytes
         .iter()
-        .rev()
+        .map(|byte| format!("{:02X}", byte))
+        .collect();
+    let big_endian_bytes = uint64.to_be_bytes();
+    let hex_string_big_endian: String = big_endian_bytes
+        .iter()
         .map(|byte| format!("{:02X}", byte))
         .collect();
 
     // Prefix with "0x" to denote hexadecimal
-    println!("  Hexadecimal: 0x{}", hex_string);
+    println!("     Hex (le): 0x{}", hex_string);
+    println!("     Hex (be): 0x{}", hex_string_big_endian);
 
     println!("Integer (i64): {}", int64);
     println!("        (i32): {}", int32);
